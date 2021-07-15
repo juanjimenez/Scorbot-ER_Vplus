@@ -51,23 +51,23 @@ uint8_t eol(const char *str) {
  */
 void showEnco(const uint32_t *arr) {
 	char encoders[64], tmp[7];
-	 int aux;
-	 encoders[0] = '\0';
-	 for (int i = 0; i < 5; i++) {
-	 aux = arr[i] - 32767;
-	 itoa(aux, tmp, 10);
-	 strcat(encoders, tmp);
-	 if (i < 4)
-		 strcat(encoders, " ");
-	 }
-	 //printf("%s", "Encoder Values Are:");
-	 printf("%s\r\n", encoders);
-	/*printf("%s\r\n", "Encoder Values Are:");
+	int aux;
+	encoders[0] = '\0';
+	for (int i = 0; i < 5; i++) {
+		aux = arr[i] - 32767;
+		itoa(aux, tmp, 10);
+		strcat(encoders, tmp);
+		if (i < 4)
+			strcat(encoders, " ");
+	}
+	/*printf("%s", "Encoder Values Are:");
+	 printf("%s\r\n", encoders);*/
+	printf("%s\r\n", "Encoder Values Are:");
 	for (int i = 0; i < 5; i++)
-		printf("%s%d%s%ld\r\n", "Encoder ", i + 1, ": ", arr[i] - 32767);*/
+		printf("%s%d%s%ld\r\n", "Encoder ", i + 1, ": ", arr[i] - 32767);
 }
 
-/**
+/*
  * Returns The Order Position At "orders" Array.
  * If The Returned Number Is Greater Or Equal To N_ORDERS, The Order Does Not Exist.
  */
@@ -325,11 +325,13 @@ void resetPositions(uint32_t *v1, uint32_t *v2, TIM_HandleTypeDef *v3) {
  * Changes Between Terminal Control & Gamepad Control
  */
 uint8_t controlMode(uint8_t N) {
-	if (N % 2 == 0)
-		printf("%s\r\n", "Changed To Gamepad Mode");
-	else if (N % 2 != 0)
-		printf("%s\r\n", "Changed To Terminal Mode");
-	return N++;
+	if(N == 127)
+		N = 0;
+	if(N % 2 != 0)
+		printf("%s\r\n", "Terminal Mode Enabled");
+	else
+		printf("%s\r\n", "Gamepad Mode Enabled");
+	return N + 1;
 }
 
 /*
@@ -388,7 +390,7 @@ void stopRobot(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin) {
  * Calculates The Duty Cycles For Each Motor.
  */
 
-void getPwm(arm_pid_instance_f32 *pid, uint8_t home) {
+void getPwm(arm_pid_instance_f32 *pid) {
 
 	// Encoder Timers Array
 	TIM_HandleTypeDef encoTimers[6] =
@@ -411,8 +413,6 @@ void getPwm(arm_pid_instance_f32 *pid, uint8_t home) {
 			pwmTimers[i].Instance->CCR2 = pwm[i];
 		else
 			pwmTimers[i].Instance->CCR1 = pwm[i];
-		if (home == 0)
-			encoActual[i] = encoTimers[i].Instance->CNT;
 	}
 
 }
@@ -449,107 +449,5 @@ void preHome() {
 	pwmTimers[3].Instance->CCR2 = 512;
 	while (HAL_GPIO_ReadPin(gpios[3], gpioPorts[3]))
 		asm("NOP");
-}
-
-/*
- * Moves The Robot To Home Position
- */
-
-void home(arm_pid_instance_f32 *pid) {
-
-	/*uint32_t duty[5], encAct[5];
-	 uint32_t homeStage_0[5] = { 65000, 15000, 40000, 50000, 50000 };
-	 uint32_t homeStage_1[5] = { 5000, 35000, 20000, 20000, 20000 };
-	 uint32_t initSw[5], finSw[5];
-	 uint32_t encTime[5] = { 275000, 100000, 150000, 150000, 150000 };
-	 uint8_t stage[5];
-	 uint32_t sameEnc;
-	 long int dif[5];
-
-	 GPIO_TypeDef *gpios[5] = { GPIOA, GPIOB, GPIOB, GPIOB, GPIOC };
-	 uint16_t gpioPorts[5] = { GPIO_PIN_15, GPIO_PIN_1, GPIO_PIN_2, GPIO_PIN_10,
-	 GPIO_PIN_0 };
-
-	 printf("%s\r\n", "HOMING...");
-	 for(uint8_t i = 0; i < 5; i++)
-	 arm_pid_init_f32(&PID[i], 1);
-
-	 pwmTIM[0]->Instance->CCR1 = 512;
-	 pwmTIM[1]->Instance->CCR1 = 3583;
-	 pwmTIM[2]->Instance->CCR1 = 512;
-	 HAL_Delay(3000);
-	 pwmTIM[2]->Instance->CCR1 = 3583;
-	 HAL_Delay(1000);
-	 for (uint8_t i = 0; i < 5; i++) {
-	 if (i == 3)
-	 pwmTIM[i]->Instance->CCR2 = HALF_DUTY;
-	 else
-	 pwmTIM[i]->Instance->CCR1 = HALF_DUTY;
-	 }
-	 for (uint8_t j = 0; j < 3; j++) {
-	 resetPositions(enc, pos, encTIM);
-	 printf("%s%d\r\n", "Step ", j);
-	 stage[j] = 0;
-	 pos[j] = homeStage_0[j];
-	 sameEnc = 0;
-	 while (1) {
-	 for (int i = 0; i < 5; i++) {
-	 enc[i] = encTIM[i]->Instance->CNT;
-	 dif[i] = enc[i] - pos[i];
-	 duty[i] = arm_pid_f32(&PID[i], dif[i]);
-	 duty[i] += HALF_DUTY;
-	 if (duty[i] > 3583) {
-	 duty[i] = 3583;
-	 } else if (duty[i] < 512) {
-	 duty[i] = 512;
-	 }
-	 if (i == 3)
-	 pwmTIM[i]->Instance->CCR2 = duty[i];
-	 else
-	 pwmTIM[i]->Instance->CCR1 = duty[i];
-	 encAct[i] = encTIM[i]->Instance->CNT;
-	 }
-	 if (encAct[j] == enc[j])
-	 sameEnc++;
-
-	 if (sameEnc > encTime[j] && stage[j] == 0) {
-	 printf("%s\r\n", "Limit Reached");
-	 pos[j] = homeStage_1[j];
-	 if (j == 3) {
-	 pos[3] = 23000;
-	 pos[4] = 23000;
-	 } else if (j == 4) {
-	 pos[3] = 37000;
-	 pos[4] = 23000;
-	 }
-	 stage[j]++;
-	 }
-	 if (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j]) && stage[j] == 1) {
-	 initSw[j] = encTIM[j]->Instance->CNT;
-	 printf("%s%lu\r\n", "initSw: ", initSw[j]);
-	 while (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])) {
-	 finSw[j] = encTIM[j]->Instance->CNT;
-	 }
-	 printf("%s%lu\r\n", "finSw: ", finSw[j]);
-	 pos[j] = initSw[j] + finSw[j];
-	 pos[j] = pos[j] >> 1;
-	 if (j == 4) {
-	 pos[3] -= 244;
-	 pos[4] += 1186;
-	 }
-
-
-	 printf("%s%lu\r\n", "position: ", pos[j]);
-	 stage[j]++;
-	 sameEnc = 0;
-	 }
-	 if (sameEnc > 30000 && stage[j] == 2) {
-	 printf("%s%d%s\r\n", "Joint ", j, " Finished!!!");
-	 break;
-	 }
-	 }
-	 }
-	 printf("%s\r\n", "HOMING PROCESS FINISHED SUCCESSFULLY!!!");
-	 resetPositions(enc, pos, encTIM);*/
 }
 

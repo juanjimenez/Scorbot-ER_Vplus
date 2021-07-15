@@ -14,15 +14,16 @@ uint8_t shut[2] = { 0x0C, 0x00 };	// Display    -> Shutdown Mode
 uint8_t test[2] = { 0x0F, 0x00 };	// Test Mode  -> Disabled
 
 // Words & Digits
+uint8_t cancelWord[4] = { 0x0D, 0x15, 0x0D, 0x0E };
 uint8_t cleanWord[4] = { 0x00, 0x00, 0x00, 0x00 };	// All Led Are Off
 uint8_t cntlWord[4] = { 0x0D, 0x15, 0x0F, 0x0E }; 	// cntL : Control Mode
+uint8_t doneWord[4] = { 0x3D, 0x1D, 0x15, 0x4F };
 uint8_t homeWord[4] = { 0x37, 0x1D, 0x15, 0x4F };	// hone : Home position
-uint8_t loadWord[4] = { 0x0E, 0x1D, 0x77, 0x3D };	// LoAd : Load program/position
-uint8_t saveWord[4] = { 0x5B, 0x77, 0x3E, 0x4F };	// SAvE : Save program/position
+uint8_t loadWord[4] = { 0x0E, 0x1D, 0x77, 0x3D };// LoAd : Load program/position
+uint8_t saveWord[4] = { 0x5B, 0x77, 0x3E, 0x4F };// SAvE : Save program/position
 uint8_t startWord[4] = { 0x5B, 0x0F, 0x05, 0x0F }; 	// Strt : Activate H Bridges
 uint8_t stopWord[4] = { 0x5B, 0x0F, 0x1D, 0x67 }; 	// StoP : Disable H Bridges
 uint8_t zeroWord[4] = { 0x00, 0x00, 0x00, 0x7E };	// Zero (digit)
-
 
 uint8_t numbers[10] = { 0x7E, 0x30, 0x6D, 0x79, 0x33,	// 0, 1, 2, 3, 4
 		0x5B, 0x5F, 0x70, 0x7F, 0x73,					// 5, 6, 7, 8, 9
@@ -47,6 +48,17 @@ uint8_t num2Segment(uint8_t num) {
 	return (numbers[num]);
 }
 
+void emptyArray(uint8_t *src) {
+	for (int i = 0; i < sizeof(src); i++)
+		src[i] = 0;
+}
+void blankZeros(uint8_t *src) {
+	uint8_t i = 0;
+	while (src[i] == numbers[0]) {
+		src[i] = 0x00;
+		i++;
+	}
+}
 
 /*
  * Initializes MAX7219
@@ -85,7 +97,7 @@ void reverse(uint8_t *str) {
 }
 
 /*
- *
+ * Converts a Number Into a Digit
  */
 void seg2Str(uint8_t *dst, uint8_t *src) {
 	uint8_t N = sizeof(src);
@@ -94,7 +106,7 @@ void seg2Str(uint8_t *dst, uint8_t *src) {
 }
 
 /*
- * Send 1 Byte Over SPI
+ * Send 2 Bytes Over SPI
  */
 void sendData(uint8_t *dato) {
 	HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET);
@@ -113,3 +125,96 @@ void sendWord(uint8_t *str) {
 		sendData(buffer);
 	}
 }
+
+/*
+ * Prints a Number On The 4 Digit 7 Segment Display
+ */
+void printNumber(uint16_t N) {
+	uint8_t segment[4], digits[4];
+	num2Array(digits, N);
+	seg2Str(segment, digits);
+	reverse(segment);
+	blankZeros(segment);
+	sendWord(segment);
+}
+
+/*
+ * Checks Joystick Value. If Its Out Of Range, Modifies PWM Duty Cycle
+ */
+uint8_t joyInRange(uint32_t joy) {
+	if (joy >= 2688)
+		return 1;
+	else if (joy <= 1408)
+		return 1;
+	return 0;
+}
+
+void saveMenu(uint32_t *src) {
+	uint8_t N = 1;
+	sendWord(saveWord);
+	HAL_Delay(1000);
+	sendWord(cleanWord);
+	printNumber(N);
+	HAL_Delay(250);
+	while (!HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13)) {
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12)) {
+			N++;
+			if (N > 100)
+				N = 100;
+			sendWord(cleanWord);
+			printNumber(N);
+			HAL_Delay(250);
+		}
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11)) {
+			N--;
+			if (N < 1)
+				N = 1;
+			sendWord(cleanWord);
+			printNumber(N);
+			HAL_Delay(250);
+		}
+		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12)) {
+			sendWord(cancelWord);
+			HAL_Delay(1000);
+			sendWord(cleanWord);
+			goto leaveSave;
+		}
+	}
+	save(src, N);
+	leaveSave: asm("NOP");
+}
+
+void loadMenu(uint32_t *src) {
+	uint8_t N = 0;
+	sendWord(loadWord);
+	HAL_Delay(1000);
+	sendWord(cleanWord);
+	printNumber(N);
+	HAL_Delay(250);
+	while (!HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13)) {
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12)) {
+			N++;
+			if (N > 100)
+				N = 100;
+			sendWord(cleanWord);
+			printNumber(N);
+			HAL_Delay(250);
+		}
+		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11)) {
+			if (N > 0)
+				N--;
+			sendWord(cleanWord);
+			printNumber(N);
+			HAL_Delay(250);
+		}
+		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12)) {
+			sendWord(cancelWord);
+			HAL_Delay(1000);
+			sendWord(cleanWord);
+			goto leaveLoad;
+		}
+	}
+	load(src, N, 5);
+	leaveLoad: asm("NOP");
+}
+

@@ -42,10 +42,10 @@
 /* USER CODE BEGIN PD */
 
 // Buffer Maximum Size
-# define MAX_BUFF 32
+#define MAX_BUFF 32
 
 // Reference position counter value
-# define HOME_CNT 32767
+#define HOME_CNT 32767
 #define RXBUFSIZE 64
 #define STR_SIZE 7
 #define BUFF_SIZE 16
@@ -126,11 +126,16 @@ uint8_t stage[4];
 uint32_t initSw[5], finSw[5];
 uint32_t encTime[4] = { 250000, 50000, 120000, 150000 };
 uint32_t sameEnc, temp;
-uint8_t mode;
+uint8_t mode = 0;
 uint8_t gameSaveLoad = 0;
-
+uint32_t modeCNT = 0;
+uint8_t gripStatus = 0;
+uint32_t cnt;
+uint32_t x, y;
+extern uint8_t cancelWord[4];
 extern uint8_t cleanWord[4]; // ____
 extern uint8_t cntlWord[4]; // cntL
+extern uint8_t doneWord[4]; // donE
 extern uint8_t homeWord[4];	// Hone
 extern uint8_t loadWord[4];	// LoAd
 extern uint8_t saveWord[4];	// SAvE
@@ -234,7 +239,7 @@ int main(void) {
 
 	// Initialize Led Driver
 	initMatrix();
-
+	sendWord(cleanWord);
 	// Initialize PIDs
 	// Base
 	arm_pid_instance_f32 PID0;
@@ -305,114 +310,203 @@ int main(void) {
 	/* USER CODE BEGIN WHILE */
 
 	while (1) {
-		getPwm(PIDs, homeON);
-		while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11) && !HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12)) {
-			TIM12->CCR2 = 1024;
-			TIM13->CCR1 = 1024;
-		}
-		while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12) && !HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11)) {
-			TIM12->CCR2 = 3072;
-			TIM13->CCR1 = 3072;
-		}
-		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13)) {
-			printf("%s\r\n", "Save");
-			HAL_Delay(250);
-		}
-		if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12)) {
-			printf("%s\r\n", "Load");
-			HAL_Delay(250);
-		}
-		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8)) {
-			printf("%s\r\n", "Home");
-			HAL_Delay(250);
-		}
-		if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_2)) {
-			printf("%s\r\n", "Grip");
-			HAL_Delay(250);
-		}
-		if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9)) {
-			printf("%s\r\n", "Control Mode");
-			HAL_Delay(250);
+
+		/*
+		 * Terminal Mode
+		 */
+		while (mode % 2 == 0) {
+			//Position Control
+			getPwm(PIDs);
+			if (homeON == 0)
+				goto home;
 		}
 
-		if (homeON == 0) {
-			printf("%s\r\n", "HOMING...");
-			preHome();
-			setSpeed(velo, 65);
-			for (uint8_t j = 0; j < 4; j++) {
-				resetPositions(enco, position, encoTimers);
-				HAL_Delay(10);
-				stage[j] = 0;
-				position[j] = homeStage_0[j];
-				if (j == 3) {
-					position[3] = 37000;
-					position[4] = 37000;
-				}
-				sameEnc = 0;
-				while (1) {
-					for (uint8_t i = 0; i < 5; i++) {
-						enco[i] = encoTimers[i].Instance->CNT;
-						error[i] = enco[i] - position[i] + offset[i];
-						pwm[i] = arm_pid_f32(&PIDs[i], error[i]);
-						pwm[i] += HALF_DUTY;
-						if (pwm[i] > velo[i]) {
-							pwm[i] = velo[i];
-						} else if (pwm[i] < velo[i + 5]) {
-							pwm[i] = velo[i + 5];
-						}
-						if (i == 3)
-							pwmTimers[i].Instance->CCR2 = pwm[i];
-						else
-							pwmTimers[i].Instance->CCR1 = pwm[i];
-						encoActual[i] = encoTimers[i].Instance->CNT;
+		/*
+		 * Gamepad Mode
+		 */
+		while (mode % 2 != 0) {
+			setSpeed(velo, 100);
+			// Position Control
+			getPwm(PIDs);
+			// Adjust Duty Cycle
+			for (int i = 0; i < 5; i++) {
+				if (i < 3) {
+					if (joyInRange(moveVars[i]) == 1) {
+						pwmTimers[i].Instance->CCR1 = moveVars[i];
+						position[i] = enco[i];
 					}
-
-					//getPwm(PIDs, homeON);
-					if (encoActual[j] == enco[j])
-						sameEnc++;
-
-					if (sameEnc > encTime[j] && stage[j] == 0) {
-						HAL_Delay(10);
-						position[j] = homeStage_1[j];
-						if (j == 3) {
-							position[3] = 23000;
-							position[4] = 23000;
-						}
-						stage[j]++;
-					} else if (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])
-							&& stage[j] == 1) {
-						initSw[j] = encoTimers[j].Instance->CNT;
-						HAL_Delay(10);
-						while (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])) {
-							finSw[j] = encoTimers[j].Instance->CNT;
-						}
-						HAL_Delay(10);
-						position[j] = initSw[j] + finSw[j];
-						position[j] = position[j] >> 1;
-						if (j == 3) {
-							temp = position[3];
-							position[3] = temp + 320;
-							position[4] = temp - 320;
-						}
-						HAL_Delay(10);
-						stage[j]++;
-						sameEnc = 0;
-					}
-					if (sameEnc > 30000 && stage[j] == 2) {
-						HAL_Delay(10);
-						break;
+				} else {
+					if (joyInRange(moveVars[3]) == 1) {
+						pwmTimers[3].Instance->CCR2 = moveVars[3];
+						pwmTimers[4].Instance->CCR1 = 4095 - moveVars[3];
+						position[i] = enco[i];
 					}
 				}
+				enco[i] = encoTimers[i].Instance->CNT;
 			}
-			openGrip(&htim14, GPIOC, GPIO_PIN_13);
-			HAL_Delay(3000);
-			closeGrip(&htim14, GPIOC, GPIO_PIN_13);
-			printf("%s\r\n", "HOMING PROCESS FINISHED SUCCESSFULLY!!!");
-			resetPositions(enco, position, encoTimers);
-			homeON++;
+			// Open - Close Grip
+			if (HAL_GPIO_ReadPin(GPIOD, GPIO_PIN_2)) {
+				gripStatus++;
+				if (gripStatus > 127)
+					gripStatus = 0;
+				if (gripStatus % 2 == 0)
+					closeGrip(&htim14, GPIOC, GPIO_PIN_13);
+				else
+					openGrip(&htim14, GPIOC, GPIO_PIN_13);
+			}
+
+			//If Home Button Is Pressed, Jump To Home Label
+			if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_8)) {
+				homeON = 0;
+				sendWord(homeWord);
+				HAL_Delay(1000);
+				sendWord(cleanWord);
+				goto home;
+			}
+
+			//Pitch Up
+			while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11)) {
+				TIM12->CCR2 = 3072;
+				TIM13->CCR1 = 3072;
+				enco[3] = htim4.Instance->CNT;
+				enco[4] = htim5.Instance->CNT;
+				position[3] = htim4.Instance->CNT;
+				position[4] = htim5.Instance->CNT;
+			}
+
+			//Pitch Down
+			while (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12)) {
+				TIM12->CCR2 = 1024;
+				TIM13->CCR1 = 1024;
+				enco[3] = htim4.Instance->CNT;
+				enco[4] = htim5.Instance->CNT;
+				position[3] = htim4.Instance->CNT;
+				position[4] = htim5.Instance->CNT;
+			}
+
+			// Start, Stop & Control Mode
+			if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9)) {
+				cnt = 0;
+				while (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_9) && cnt < 1800000)
+					cnt++;
+				if (cnt >= 1200000) {
+					x++;
+					mode = controlMode(mode);
+					sendWord(cntlWord);
+					HAL_Delay(1000);
+					sendWord(cleanWord);
+				} else if (cnt < 1200000) {
+					y++;
+					if (y % 2 == 0) {
+						for (uint8_t i = 0; i < 5; i++) {
+							enco[i] = encoTimers[i].Instance->CNT;
+							position[i] = enco[i];
+						}
+						startRobot(GPIOA, GPIO_PIN_10);
+					} else if (y % 2 != 0) {
+						stopRobot(GPIOA, GPIO_PIN_10);
+					}
+				}
+				if (x > 250)
+					x = 0;
+				if (y > 250)
+					y = 0;
+				HAL_Delay(500);
+			}
+
+			// Save Position
+			if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13)) {
+				saveMenu(position);
+			}
+
+			// Load Position
+			if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12)) {
+				loadMenu(position);
+			}
+
+			// Home
+			home: if (homeON == 0) {
+				printf("%s\r\n", "HOMING...");
+				preHome();
+				setSpeed(velo, 65);
+				for (uint8_t j = 0; j < 4; j++) {
+					resetPositions(enco, position, encoTimers);
+					HAL_Delay(10);
+					stage[j] = 0;
+					position[j] = homeStage_0[j];
+					if (j == 3) {
+						position[3] = 37000;
+						position[4] = 37000;
+					}
+					sameEnc = 0;
+					while (1) {
+						for (uint8_t i = 0; i < 5; i++) {
+							enco[i] = encoTimers[i].Instance->CNT;
+							error[i] = enco[i] - position[i] + offset[i];
+							pwm[i] = arm_pid_f32(&PIDs[i], error[i]);
+							pwm[i] += HALF_DUTY;
+							if (pwm[i] > velo[i]) {
+								pwm[i] = velo[i];
+							} else if (pwm[i] < velo[i + 5]) {
+								pwm[i] = velo[i + 5];
+							}
+							if (i == 3)
+								pwmTimers[i].Instance->CCR2 = pwm[i];
+							else
+								pwmTimers[i].Instance->CCR1 = pwm[i];
+							encoActual[i] = encoTimers[i].Instance->CNT;
+						}
+						if (encoActual[j] == enco[j])
+							sameEnc++;
+
+						if (sameEnc > encTime[j] && stage[j] == 0) {
+							HAL_Delay(10);
+							position[j] = homeStage_1[j];
+							if (j == 3) {
+								position[3] = 23000;
+								position[4] = 23000;
+							}
+							stage[j]++;
+						} else if (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])
+								&& stage[j] == 1) {
+							initSw[j] = encoTimers[j].Instance->CNT;
+							HAL_Delay(10);
+							while (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])) {
+								finSw[j] = encoTimers[j].Instance->CNT;
+							}
+							HAL_Delay(10);
+							position[j] = initSw[j] + finSw[j];
+							position[j] = position[j] >> 1;
+							if (j == 3) {
+								temp = position[3];
+								position[3] = temp + 320;
+								position[4] = temp - 320;
+							}
+							HAL_Delay(10);
+							stage[j]++;
+							sameEnc = 0;
+						}
+						if (sameEnc > 30000 && stage[j] == 2) {
+							HAL_Delay(10);
+							break;
+						}
+					}
+				}
+				openGrip(&htim14, GPIOC, GPIO_PIN_13);
+				HAL_Delay(3000);
+				closeGrip(&htim14, GPIOC, GPIO_PIN_13);
+				printf("%s\r\n", "HOMING PROCESS FINISHED SUCCESSFULLY!!!");
+				resetPositions(enco, position, encoTimers);
+				if (mode % 2 != 0) {
+					sendWord(doneWord);
+					HAL_Delay(1000);
+					sendWord(cleanWord);
+				}
+				homeON++;
+			}
 		}
+		/* USER CODE END 3 */
 	}
-	/* USER CODE END 3 */
 }
 
 /**
@@ -507,14 +601,14 @@ static void MX_ADC1_Init(void) {
 	}
 	/** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
 	 */
-	sConfig.Channel = ADC_CHANNEL_13;
+	sConfig.Channel = ADC_CHANNEL_14;
 	sConfig.Rank = 3;
 	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
 		Error_Handler();
 	}
 	/** Configure for the selected ADC regular channel its corresponding rank in the sequencer and its sample time.
 	 */
-	sConfig.Channel = ADC_CHANNEL_14;
+	sConfig.Channel = ADC_CHANNEL_13;
 	sConfig.Rank = 4;
 	if (HAL_ADC_ConfigChannel(&hadc1, &sConfig) != HAL_OK) {
 		Error_Handler();
@@ -1076,7 +1170,7 @@ static void MX_USART2_UART_Init(void) {
 
 	/* USER CODE END USART2_Init 1 */
 	huart2.Instance = USART2;
-	huart2.Init.BaudRate = 57600;
+	huart2.Init.BaudRate = 9600;
 	huart2.Init.WordLength = UART_WORDLENGTH_8B;
 	huart2.Init.StopBits = UART_STOPBITS_1;
 	huart2.Init.Parity = UART_PARITY_NONE;
@@ -1219,7 +1313,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 	uint8_t ord;
 	uint16_t N;
 
-	// Check Interrupt & Clear It
+// Check Interrupt & Clear It
 	if (__HAL_UART_GET_FLAG(huart, UART_FLAG_IDLE)) {
 		__HAL_UART_CLEAR_IDLEFLAG(&huart2);
 
@@ -1252,99 +1346,104 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		rxFilled = 0;
 	} else
 		rxFilled++;
-	ord = checkOrder(message);
-	if (ord < N_ORDERS && eol(message) == 0) {
-		/*AT+MOVE*/
-		if (ord == 0) {
-			if (checkMoveSyntax(message) == 0)
-				printf("%s\r\n", "Order Received!!!");
-			splitStr(orderNums, message);
-			for (int i = 0; i < 5; i++) {
-				position[i] = orderNums[i];
-
-			}
-
-		} else if (ord > 0 && ord < 5) {
-			if (checkOneNumSyntax(message) == 0) {
-				N = getNum(message);
-				if (N >= 0 && N <= 100) {
+	if (mode % 2 == 0) {
+		ord = checkOrder(message);
+		if (ord < N_ORDERS && eol(message) == 0) {
+			/*AT+MOVE*/
+			if (ord == 0) {
+				if (checkMoveSyntax(message) == 0)
 					printf("%s\r\n", "Order Received!!!");
-					switch (ord) {
-					/*AT+VELO*/
-					case 1:
-						dmax = N;
-						setSpeed(velo, dmax);
-						break;
-						/*AT+LOAD*/
-					case 2:
-						load(position, N, 5);
-						break;
-						/*AT+SAVE*/
-					case 3:
-						if (N == 0)
-							printf("%s\r\n",
-									"This Is Home Position.\r\nYou Are Not Allowed Modify It");
-						else
-							save(position, N);
-						break;
-					case 4:
-						printList(N);
-						break;
-					default:
-						break;
-					}
-				} else {
-					printf("%s\r\n", "ERROR!!!\r\nNumber Out Of Range.");
-					printf("%s\r\n", "Insert Values Between 0 - 100.");
-				}
-			} else if (checkOneNumSyntax(message) != 0)
-				printf("%s\r\n", "SYNTAX ERROR!!!");
+				splitStr(orderNums, message);
+				for (int i = 0; i < 5; i++) {
+					position[i] = orderNums[i];
 
-		} else if (ord > 4 && ord < 14) {
-			switch (ord) {
-			case 5:
-				clearFlash();
-				break;
-			case 6:
-				printf("%s\r\n", "Rebooting Microcontroller. Please Wait");
-				for (uint32_t i = 0; i < 7500000; i++)
-					asm("NOP");
-				HAL_NVIC_SystemReset();
-				break;
-			case 7:
-				mode = controlMode(mode);
-				break;
-			case 8:
-				showEnco(enco);
-				break;
-			case 9:
-				homeON = 0;
-				setSpeed(velo, 65);
-				break;
-			case 10:
-				openGrip(&htim14, GPIOC, GPIO_PIN_13);
-				break;
-			case 11:
-				closeGrip(&htim14, GPIOC, GPIO_PIN_13);
-				break;
-			case 12:
-				startRobot(GPIOA, GPIO_PIN_10);
-				break;
-			case 13:
-				stopRobot(GPIOA, GPIO_PIN_10);
-				break;
-			default:
-				break;
+				}
+
+			} else if (ord > 0 && ord < 5) {
+				if (checkOneNumSyntax(message) == 0) {
+					N = getNum(message);
+					if (N >= 0 && N <= 100) {
+						printf("%s\r\n", "Order Received!!!");
+						switch (ord) {
+						/*AT+VELO*/
+						case 1:
+							dmax = N;
+							setSpeed(velo, dmax);
+							break;
+							/*AT+LOAD*/
+						case 2:
+							load(position, N, 5);
+							break;
+							/*AT+SAVE*/
+						case 3:
+							if (N == 0)
+								printf("%s\r\n",
+										"This Is Home Position.\r\nYou Are Not Allowed Modify It");
+							else
+								save(position, N);
+							break;
+						case 4:
+							printList(N);
+							break;
+						default:
+							break;
+						}
+					} else {
+						printf("%s\r\n", "ERROR!!!\r\nNumber Out Of Range.");
+						printf("%s\r\n", "Insert Values Between 0 - 100.");
+					}
+				} else if (checkOneNumSyntax(message) != 0)
+					printf("%s\r\n", "SYNTAX ERROR!!!");
+
+			} else if (ord > 4 && ord < 14) {
+				switch (ord) {
+				case 5:
+					clearFlash();
+					break;
+				case 6:
+					printf("%s\r\n", "Rebooting Microcontroller. Please Wait");
+					for (uint32_t i = 0; i < 7500000; i++)
+						asm("NOP");
+					HAL_NVIC_SystemReset();
+					break;
+				case 7:
+					mode = controlMode(mode);
+					break;
+				case 8:
+					showEnco(enco);
+					break;
+				case 9:
+					homeON = 0;
+					setSpeed(velo, 65);
+					break;
+				case 10:
+					openGrip(&htim14, GPIOC, GPIO_PIN_13);
+					break;
+				case 11:
+					closeGrip(&htim14, GPIOC, GPIO_PIN_13);
+					break;
+				case 12:
+					startRobot(GPIOA, GPIO_PIN_10);
+					break;
+				case 13:
+					stopRobot(GPIOA, GPIO_PIN_10);
+					break;
+				default:
+					break;
+				}
 			}
+		} else {
+			if (eol(message) != 0)
+				printf("%s\r\n", "ERROR!!!\r\nThere Is No End Of Line.");
+			else if (checkOrder(message) >= N_ORDERS)
+				printf("%s\r\n", "ERROR!!!\r\nThe Order Does Not Exist.");
+			else if (checkSyntax(message) != 0)
+				printf("%s\r\n", "SYNTAX ERROR!!!");
 		}
-	} else {
-		if (eol(message) != 0)
-			printf("%s\r\n", "ERROR!!!\r\nThere Is No End Of Line.");
-		else if (checkOrder(message) >= N_ORDERS)
-			printf("%s\r\n", "ERROR!!!\r\nThe Order Does Not Exist.");
-		else if (checkSyntax(message) != 0)
-			printf("%s\r\n", "SYNTAX ERROR!!!");
-	}
+	} else if (strncmp(message, "AT+CNTL", 7) == 0)
+		mode = controlMode(mode);
+	else
+		printf("%s\r\n", "Terminal Mode Is Disabled!!!");
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {

@@ -32,7 +32,6 @@ extern "C" {
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <scorbot_Lib.h>
 #include <arm_common_tables.h>
 #include <arm_const_structs.h>
 #include <arm_math.h>

@@ -19,8 +19,7 @@ void closeGrip(TIM_HandleTypeDef *htimx, GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin)
 void startRobot(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin);
 void stopRobot(GPIO_TypeDef *GPIOx, uint16_t GPIO_Pin);
 void preHome();
-void home(arm_pid_instance_f32 *pid);
-void getPwm(arm_pid_instance_f32 *pid, uint8_t home);
+void getPwm(arm_pid_instance_f32 *pid);
 uint32_t clearFlash();
 void printList(uint8_t N);
 #endif /* INC_ATCOMMANDS_H_ */
