@@ -92,46 +92,21 @@ DMA_HandleTypeDef hdma_usart2_tx;
 char orders[N_ORDERS][STR_SIZE] = { "AT+MOVE", "AT+VELO", "AT+LOAD", "AT+SAVE",
 		"AT+LIST", "AT+CLRM", "AT+RSET", "AT+CNTL", "AT+ENCO", "AT+HOME",
 		"AT+OPEN", "AT+CLSE", "AT+STRT", "AT+STOP" };
-char split[N_STRING][BUFF_SIZE];
 
-char buffer[7];
-uint8_t num;
-uint32_t encAct = 0, encPrev;
-uint8_t rxFilled = 0;
-uint8_t rxCnt = 0;
-uint8_t rxBufPos = 0;
-uint8_t rxBuf[RXBUFSIZE];
-uint8_t N, dmax;
-uint16_t start, len, aux;
-uint32_t moveVars[4];
-int aux2;
-char message[RXBUFSIZE];
-uint32_t enco[6], velo[10] = { HALF_DUTY,
-HALF_DUTY,
-HALF_DUTY, HALF_DUTY, HALF_DUTY, HALF_DUTY, HALF_DUTY, HALF_DUTY,
-HALF_DUTY, HALF_DUTY };
-uint32_t position[6] = { HOME_CNT, HOME_CNT, HOME_CNT, HOME_CNT, HOME_CNT,
-HOME_CNT };
-uint32_t encoActual[6];
+char split[N_STRING][BUFF_SIZE], message[RXBUFSIZE];
 int orderNums[7];
 long int error[6], offset[6] = { 0, 0, 0, 0, 0, 0 };
-char split[N_STRING][BUFF_SIZE];
-uint8_t uartRX[32];
-uint8_t pressed;
+uint8_t rxFilled = 0, rxCnt = 0, rxBufPos = 0, gripStatus = 0, N, dmax,
+		rxBuf[RXBUFSIZE], stage[4], homeON = 128, mode = 0;
+uint16_t start, len, aux;
+uint32_t sameEnc, temp, cnt, x, y, moveVars[4], enco[6], velo[10],
+		encoActual[6], position[6] = {
+		HOME_CNT, HOME_CNT, HOME_CNT, HOME_CNT, HOME_CNT, HOME_CNT },
+		homeStage_0[4] = { 65000, 15000, 40000, 40000 }, homeStage_1[4] = {
+				5000, 35000, 10000, 20000 }, initSw[5], finSw[5], encTime[4] = {
+				200000, 50000, 120000, 150000 };
 float32_t pwm[6];
-uint8_t homeON = 128;
-uint32_t homeStage_0[4] = { 65000, 15000, 40000, 40000 }, homeStage_1[4] = {
-		5000, 35000, 10000, 20000 };
-uint8_t stage[4];
-uint32_t initSw[5], finSw[5];
-uint32_t encTime[4] = { 250000, 50000, 120000, 150000 };
-uint32_t sameEnc, temp;
-uint8_t mode = 0;
-uint8_t gameSaveLoad = 0;
-uint32_t modeCNT = 0;
-uint8_t gripStatus = 0;
-uint32_t cnt;
-uint32_t x, y;
+
 extern uint8_t cancelWord[4];
 extern uint8_t cleanWord[4]; // ____
 extern uint8_t cntlWord[4]; // cntL
@@ -318,25 +293,28 @@ int main(void) {
 			//Position Control
 			getPwm(PIDs);
 			if (homeON == 0)
-				goto home;
+				break;
 		}
 
 		/*
 		 * Gamepad Mode
 		 */
 		while (mode % 2 != 0) {
-			setSpeed(velo, 100);
+			setSpeed(velo, 65);
 			// Position Control
 			getPwm(PIDs);
 			// Adjust Duty Cycle
 			for (int i = 0; i < 5; i++) {
 				if (i < 3) {
 					if (joyInRange(moveVars[i]) == 1) {
+						pwm[i] = moveVars[i];
 						pwmTimers[i].Instance->CCR1 = moveVars[i];
 						position[i] = enco[i];
 					}
 				} else {
 					if (joyInRange(moveVars[3]) == 1) {
+						pwm[3] = moveVars[3];
+						pwm[4] = moveVars[4];
 						pwmTimers[3].Instance->CCR2 = moveVars[3];
 						pwmTimers[4].Instance->CCR1 = 4095 - moveVars[3];
 						position[i] = enco[i];
@@ -361,7 +339,7 @@ int main(void) {
 				sendWord(homeWord);
 				HAL_Delay(1000);
 				sendWord(cleanWord);
-				goto home;
+				break;
 			}
 
 			//Pitch Up
@@ -403,8 +381,12 @@ int main(void) {
 							position[i] = enco[i];
 						}
 						startRobot(GPIOA, GPIO_PIN_10);
+						sendWord(startWord);
+						HAL_Delay(1000);
+						sendWord(cleanWord);
 					} else if (y % 2 != 0) {
 						stopRobot(GPIOA, GPIO_PIN_10);
+						sendWord(stopWord);
 					}
 				}
 				if (x > 250)
@@ -423,90 +405,90 @@ int main(void) {
 			if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_12)) {
 				loadMenu(position);
 			}
-
-			// Home
-			home: if (homeON == 0) {
-				printf("%s\r\n", "HOMING...");
-				preHome();
-				setSpeed(velo, 65);
-				for (uint8_t j = 0; j < 4; j++) {
-					resetPositions(enco, position, encoTimers);
-					HAL_Delay(10);
-					stage[j] = 0;
-					position[j] = homeStage_0[j];
-					if (j == 3) {
-						position[3] = 37000;
-						position[4] = 37000;
-					}
-					sameEnc = 0;
-					while (1) {
-						for (uint8_t i = 0; i < 5; i++) {
-							enco[i] = encoTimers[i].Instance->CNT;
-							error[i] = enco[i] - position[i] + offset[i];
-							pwm[i] = arm_pid_f32(&PIDs[i], error[i]);
-							pwm[i] += HALF_DUTY;
-							if (pwm[i] > velo[i]) {
-								pwm[i] = velo[i];
-							} else if (pwm[i] < velo[i + 5]) {
-								pwm[i] = velo[i + 5];
-							}
-							if (i == 3)
-								pwmTimers[i].Instance->CCR2 = pwm[i];
-							else
-								pwmTimers[i].Instance->CCR1 = pwm[i];
-							encoActual[i] = encoTimers[i].Instance->CNT;
-						}
-						if (encoActual[j] == enco[j])
-							sameEnc++;
-
-						if (sameEnc > encTime[j] && stage[j] == 0) {
-							HAL_Delay(10);
-							position[j] = homeStage_1[j];
-							if (j == 3) {
-								position[3] = 23000;
-								position[4] = 23000;
-							}
-							stage[j]++;
-						} else if (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])
-								&& stage[j] == 1) {
-							initSw[j] = encoTimers[j].Instance->CNT;
-							HAL_Delay(10);
-							while (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])) {
-								finSw[j] = encoTimers[j].Instance->CNT;
-							}
-							HAL_Delay(10);
-							position[j] = initSw[j] + finSw[j];
-							position[j] = position[j] >> 1;
-							if (j == 3) {
-								temp = position[3];
-								position[3] = temp + 320;
-								position[4] = temp - 320;
-							}
-							HAL_Delay(10);
-							stage[j]++;
-							sameEnc = 0;
-						}
-						if (sameEnc > 30000 && stage[j] == 2) {
-							HAL_Delay(10);
-							break;
-						}
-					}
-				}
-				openGrip(&htim14, GPIOC, GPIO_PIN_13);
-				HAL_Delay(3000);
-				closeGrip(&htim14, GPIOC, GPIO_PIN_13);
-				printf("%s\r\n", "HOMING PROCESS FINISHED SUCCESSFULLY!!!");
-				resetPositions(enco, position, encoTimers);
-				if (mode % 2 != 0) {
-					sendWord(doneWord);
-					HAL_Delay(1000);
-					sendWord(cleanWord);
-				}
-				homeON++;
-			}
 		}
-		/* USER CODE END 3 */
+
+		// Home
+		if (homeON == 0) {
+			printf("%s\r\n", "HOMING...");
+			preHome();
+			setSpeed(velo, 65);
+			for (uint8_t j = 0; j < 4; j++) {
+				resetPositions(enco, position, encoTimers);
+				HAL_Delay(10);
+				stage[j] = 0;
+				position[j] = homeStage_0[j];
+				if (j == 3) {
+					position[3] = 37000;
+					position[4] = 37000;
+				}
+				sameEnc = 0;
+				while (1) {
+					for (uint8_t i = 0; i < 5; i++) {
+						enco[i] = encoTimers[i].Instance->CNT;
+						error[i] = enco[i] - position[i] + offset[i];
+						pwm[i] = arm_pid_f32(&PIDs[i], error[i]);
+						pwm[i] += HALF_DUTY;
+						if (pwm[i] > velo[i]) {
+							pwm[i] = velo[i];
+						} else if (pwm[i] < velo[i + 5]) {
+							pwm[i] = velo[i + 5];
+						}
+						if (i == 3)
+							pwmTimers[i].Instance->CCR2 = pwm[i];
+						else
+							pwmTimers[i].Instance->CCR1 = pwm[i];
+						encoActual[i] = encoTimers[i].Instance->CNT;
+					}
+					if (encoActual[j] == enco[j])
+						sameEnc++;
+
+					if (sameEnc > encTime[j] && stage[j] == 0) {
+						HAL_Delay(10);
+						position[j] = homeStage_1[j];
+						if (j == 3) {
+							position[3] = 23000;
+							position[4] = 23000;
+						}
+						stage[j]++;
+					} else if (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])
+							&& stage[j] == 1) {
+						initSw[j] = encoTimers[j].Instance->CNT;
+						HAL_Delay(10);
+						while (!HAL_GPIO_ReadPin(gpios[j], gpioPorts[j])) {
+							finSw[j] = encoTimers[j].Instance->CNT;
+						}
+						HAL_Delay(10);
+						position[j] = initSw[j] + finSw[j];
+						position[j] = position[j] >> 1;
+						if (j == 3) {
+							temp = position[3];
+							position[3] = temp + 320;
+							position[4] = temp - 320;
+						}
+						HAL_Delay(10);
+						stage[j]++;
+						sameEnc = 0;
+					}
+					if (sameEnc > 30000 && stage[j] == 2) {
+						HAL_Delay(10);
+						break;
+					}
+				}
+			}
+			openGrip(&htim14, GPIOC, GPIO_PIN_13);
+			HAL_Delay(3000);
+			closeGrip(&htim14, GPIOC, GPIO_PIN_13);
+			printf("%s\r\n", "HOMING PROCESS FINISHED SUCCESSFULLY!!!");
+			resetPositions(enco, position, encoTimers);
+			if (mode % 2 != 0) {
+				sendWord(doneWord);
+				HAL_Delay(1000);
+				sendWord(cleanWord);
+			}
+			homeON++;
+		}
 	}
+	/* USER CODE END 3 */
 }
 
 /**
