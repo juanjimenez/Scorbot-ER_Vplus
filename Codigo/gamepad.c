@@ -14,13 +14,13 @@ uint8_t shut[2] = { 0x0C, 0x00 };	// Display    -> Shutdown Mode
 uint8_t test[2] = { 0x0F, 0x00 };	// Test Mode  -> Disabled
 
 // Words & Digits
-uint8_t cancelWord[4] = { 0x0D, 0x15, 0x0D, 0x0E };
+uint8_t cancelWord[4] = { 0x0D, 0x15, 0x0D, 0x0E };	// Cancel
 uint8_t cleanWord[4] = { 0x00, 0x00, 0x00, 0x00 };	// All Led Are Off
 uint8_t cntlWord[4] = { 0x0D, 0x15, 0x0F, 0x0E }; 	// cntL : Control Mode
-uint8_t doneWord[4] = { 0x3D, 0x1D, 0x15, 0x4F };
+uint8_t doneWord[4] = { 0x3D, 0x1D, 0x15, 0x4F };	// Done
 uint8_t homeWord[4] = { 0x37, 0x1D, 0x15, 0x4F };	// hone : Home position
-uint8_t loadWord[4] = { 0x0E, 0x1D, 0x77, 0x3D };// LoAd : Load program/position
-uint8_t saveWord[4] = { 0x5B, 0x77, 0x3E, 0x4F };// SAvE : Save program/position
+uint8_t loadWord[4] = { 0x0E, 0x1D, 0x77, 0x3D };	// LoAd : Load program/position
+uint8_t saveWord[4] = { 0x5B, 0x77, 0x3E, 0x4F };	// SAvE : Save program/position
 uint8_t startWord[4] = { 0x5B, 0x0F, 0x05, 0x0F }; 	// Strt : Activate H Bridges
 uint8_t stopWord[4] = { 0x5B, 0x0F, 0x1D, 0x67 }; 	// StoP : Disable H Bridges
 uint8_t zeroWord[4] = { 0x00, 0x00, 0x00, 0x7E };	// Zero (digit)
@@ -149,7 +149,7 @@ uint8_t joyInRange(uint32_t joy) {
 	return 0;
 }
 
-void saveMenu(uint32_t *src) {
+uint8_t saveMenu(uint32_t *src) {
 	uint8_t N = 1;
 	sendWord(saveWord);
 	HAL_Delay(1000);
@@ -160,7 +160,7 @@ void saveMenu(uint32_t *src) {
 		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12)) {
 			N++;
 			if (N > 100)
-				N = 100;
+				N = 1;
 			sendWord(cleanWord);
 			printNumber(N);
 			HAL_Delay(250);
@@ -168,7 +168,7 @@ void saveMenu(uint32_t *src) {
 		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11)) {
 			N--;
 			if (N < 1)
-				N = 1;
+				N = 100;
 			sendWord(cleanWord);
 			printNumber(N);
 			HAL_Delay(250);
@@ -177,15 +177,19 @@ void saveMenu(uint32_t *src) {
 			sendWord(cancelWord);
 			HAL_Delay(1000);
 			sendWord(cleanWord);
-			goto leaveSave;
+			return 1;
 		}
 	}
 	save(src, N);
-	leaveSave: asm("NOP");
+	HAL_Delay(200);
+	sendWord(doneWord);
+	HAL_Delay(1000);
+	sendWord(cleanWord);
+	return 0;
 }
 
-void loadMenu(uint32_t *src) {
-	uint8_t N = 0;
+uint8_t loadMenu(uint32_t *src) {
+	uint8_t N = 1;
 	sendWord(loadWord);
 	HAL_Delay(1000);
 	sendWord(cleanWord);
@@ -195,14 +199,15 @@ void loadMenu(uint32_t *src) {
 		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_12)) {
 			N++;
 			if (N > 100)
-				N = 100;
+				N = 1;
 			sendWord(cleanWord);
 			printNumber(N);
 			HAL_Delay(250);
 		}
 		if (HAL_GPIO_ReadPin(GPIOA, GPIO_PIN_11)) {
-			if (N > 0)
-				N--;
+			N--;
+			if (N < 1)
+				N = 100;
 			sendWord(cleanWord);
 			printNumber(N);
 			HAL_Delay(250);
@@ -211,10 +216,13 @@ void loadMenu(uint32_t *src) {
 			sendWord(cancelWord);
 			HAL_Delay(1000);
 			sendWord(cleanWord);
-			goto leaveLoad;
+			return 1;
 		}
 	}
 	load(src, N, 5);
-	leaveLoad: asm("NOP");
+	HAL_Delay(200);
+	sendWord(doneWord);
+	HAL_Delay(1000);
+	sendWord(cleanWord);
+	return 0;
 }
-

@@ -13,6 +13,6 @@ void seg2Str(uint8_t *dst, uint8_t *src);
 void blankZeros(uint8_t *src);
 void emptyArray(uint8_t *src);
 void printNumber(uint16_t N);
-void saveMenu(uint32_t *src);
-void loadMenu(uint32_t *src);
+uint8_t saveMenu(uint32_t *src);
+uint8_t loadMenu(uint32_t *src);
 #endif /* INC_GAMEPAD_H_ */
